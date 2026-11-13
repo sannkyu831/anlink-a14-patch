@@ -1,0 +1,16 @@
+# 构建中间产物
+build/.tools/
+build/.work/
+build/.test-*/
+build/*.log
+
+# 发布产物（用 Release 上传，不进 git）
+release/*.exe
+release/*.zip
+
+# 通用
+*.dex
+*.jar
+Thumbs.db
+desktop.ini
+.DS_Store
