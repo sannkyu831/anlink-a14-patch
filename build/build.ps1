@@ -102,6 +102,7 @@ $e = $arch.CreateEntry("classes.dex", [IO.Compression.CompressionLevel]::Optimal
 $s = $e.Open(); $s.Write($bytes, 0, $bytes.Length); $s.Dispose()
 $arch.Dispose(); $fs.Dispose()
 Write-Host ("生成: " + $outJar + " (" + (Get-Item $outJar).Length + " 字节)") -ForegroundColor Green
+Copy-Item $outJar (Join-Path $OutDir "an-link") -Force
 
 # ---------- 6. 编译安装器 ----------
 $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -112,6 +113,7 @@ $cscArgs = @(
     ("/out:" + (Join-Path $OutDir "AnLink-A14-Patch.exe")),
     ("/resource:" + $outJar + ",anlink_payload"),
     "/r:System.Windows.Forms.dll", "/r:System.Drawing.dll",
+    "/r:System.IO.Compression.dll", "/r:System.IO.Compression.FileSystem.dll",
     (Join-Path $root "installer\AnLinkA14Setup.cs")
 )
 if ($Setup -and (Test-Path $Setup)) {
@@ -121,11 +123,24 @@ if ($Setup -and (Test-Path $Setup)) {
         ("/resource:" + $outJar + ",anlink_payload"),
         ("/resource:" + $Setup + ",anlink_setup"),
         "/r:System.Windows.Forms.dll", "/r:System.Drawing.dll",
+        "/r:System.IO.Compression.dll", "/r:System.IO.Compression.FileSystem.dll",
         (Join-Path $root "installer\AnLinkA14Setup.cs"))
     Write-Host ("包含官方安装器: " + $Setup)
 }
 & $csc @cscArgs
 if ($LASTEXITCODE -ne 0) { throw "csc 编译失败" }
+
+$installer = if ($Setup -and (Test-Path $Setup)) {
+    Join-Path $OutDir "AnLink-A14-Full.exe"
+} else {
+    Join-Path $OutDir "AnLink-A14-Patch.exe"
+}
+$hashLines = @($installer, (Join-Path $OutDir "an-link")) | ForEach-Object {
+    $hash = (Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant()
+    $hash + "  " + [IO.Path]::GetFileName($_)
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText((Join-Path $OutDir "SHA256.txt"), (($hashLines -join [Environment]::NewLine) + [Environment]::NewLine), $utf8NoBom)
 
 Write-Host ""
 Write-Host ("完成，产物在: " + $OutDir) -ForegroundColor Green

@@ -2,6 +2,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -50,7 +51,7 @@ static class AnLinkA14Setup
         form.Controls.Add(title);
 
         Label sub = new Label();
-        sub.Text = "修复 AnLink 在 Android 14 / 15 / 16 上无法投屏、无法控制的问题（替换手机端 an-link 服务端）";
+        sub.Text = "修复 AnLink 在 Android 14 / 15 / 16 上的投屏、控制和息屏控制（替换手机端 an-link 服务端）";
         sub.ForeColor = Color.DimGray;
         sub.SetBounds(20, 50, 520, 34);
         form.Controls.Add(sub);
@@ -100,8 +101,10 @@ static class AnLinkA14Setup
         form.Controls.Add(close);
 
         AppendLog("AnLink 版本 3.10（官方 an-link 服务端基于 scrcpy 1.25）");
+        AppendLog("补丁 v1.2：Android 15 真机验证版，修复息屏控制路径。");
         AppendLog("Android 14 移除了 SurfaceControl 虚拟显示事务 API，导致投屏失败。");
         AppendLog("本补丁改为使用 DisplayManager.createVirtualDisplay() 通道。");
+        AppendLog("Android 14 同时移动了物理显示电源 API，息屏控制改走 DisplayControl。");
         AppendLog("");
         currentDir = FindAnLinkDir();
         if (currentDir == null)
@@ -252,6 +255,39 @@ static class AnLinkA14Setup
         return ps[0];
     }
 
+    static bool IsAnLinkPatched(string path)
+    {
+        try
+        {
+            using (FileStream fs = File.OpenRead(path))
+            using (ZipArchive zip = new ZipArchive(fs, ZipArchiveMode.Read))
+            {
+                ZipArchiveEntry entry = zip.GetEntry("classes.dex");
+                if (entry == null) return false;
+                byte[] marker = Encoding.ASCII.GetBytes("anlink-display:");
+                using (Stream dex = entry.Open())
+                {
+                    int matched = 0;
+                    int value;
+                    while ((value = dex.ReadByte()) >= 0)
+                    {
+                        if (value == marker[matched])
+                        {
+                            matched++;
+                            if (matched == marker.Length) return true;
+                        }
+                        else
+                        {
+                            matched = value == marker[0] ? 1 : 0;
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
     static void ApplyPatch(string dir)
     {
         string target = Path.Combine(dir, TargetName);
@@ -275,12 +311,26 @@ static class AnLinkA14Setup
         if (!File.Exists(backup))
         {
             KillAnLink();
-            File.Copy(target, backup, true);
-            AppendLog("[1/4] 已备份官方服务端 -> " + BackupName);
+            if (IsAnLinkPatched(target))
+            {
+                string safety = target + ".before-update-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                File.Copy(target, safety, true);
+                AppendLog("[1/4] 当前已是补丁版，未覆盖官方备份");
+                AppendLog("      安全副本 -> " + Path.GetFileName(safety));
+            }
+            else
+            {
+                File.Copy(target, backup, true);
+                AppendLog("[1/4] 已备份官方服务端 -> " + BackupName);
+            }
         }
         else
         {
             AppendLog("[1/4] 备份已存在，保留");
+            if (IsAnLinkPatched(backup))
+            {
+                AppendLog("      [!] 该备份本身是补丁版，不可当作官方版本还原");
+            }
         }
 
         SetStatus("写入补丁 ...");
@@ -314,7 +364,7 @@ static class AnLinkA14Setup
         AppendLog("[4/4] 完成");
         AppendLog("");
         AppendLog("[√] 补丁已安装。现在连接手机（开启 USB 调试）即可。");
-        AppendLog("    Android 14+ 的投屏与触控会走 DisplayManager 通道。");
+        AppendLog("    Android 14+ 的投屏走 DisplayManager，息屏控制走 DisplayControl。");
     }
 
     static void Restore()
@@ -330,6 +380,11 @@ static class AnLinkA14Setup
                 string target = Path.Combine(dir, TargetName);
                 string backup = Path.Combine(dir, BackupName);
                 if (!File.Exists(backup)) { AppendLog("[X] 没有备份文件，无法还原。"); return; }
+                if (IsAnLinkPatched(backup))
+                {
+                    AppendLog("[X] 备份是补丁版，不是官方 3.10；请用官方安装器重装后再打补丁。");
+                    return;
+                }
                 SetStatus("还原中 ...");
                 AppendLog("[1/3] 关闭 AnLink ...");
                 KillAnLink();

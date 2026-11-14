@@ -294,7 +294,44 @@
 .end method
 ```
 
-## 7. 为什么不动 `internalStreamScreen`
+## 7. 息屏控制：`Device.setScreenPowerMode()` 与 `DisplayControl`
+
+`Controller` 的息屏消息解析无需修改。补丁替换 `Device.setScreenPowerMode(I)Z`，
+并给现有 `SurfaceControl` 包装类补上物理显示 ID/token 查询方法。SDK 34+ 优先调用
+ROM 中仍存在的 `SurfaceControl.getPhysicalDisplayIds()`；如果 API 已被移走，则通过
+新增的 `ink.anl.wrappers.DisplayControl` 枚举物理显示。拿到 token 后逐个调用
+`SurfaceControl.setDisplayPowerMode()`；两条路径都拿不到显示列表时回退原单显示路径。
+
+版本判断必须使用 `if-lt vSDK, 34, :legacy`，即只有低于 Android 14 才走旧路径。
+物理显示数组的非空判断也必须使用 `if-eqz`；写成 `if-ge` 或 `if-nez` 会让 Android 15
+恰好跳进旧路径。
+
+新增包装类的关键部分与 scrcpy 2.3.1+ 相同：
+
+```java
+ClassLoader loader = ClassLoaderFactory.createClassLoader(
+        Os.getenv("SYSTEMSERVERCLASSPATH"),
+        null, null, ClassLoader.getSystemClassLoader(), 0, true, null);
+Class<?> displayControl = loader.loadClass("com.android.server.display.DisplayControl");
+Class<?> deviceControlService = loader.loadClass("com.android.server.DeviceControlService");
+Runtime.getRuntime().loadLibrary0(deviceControlService, "android_servers");
+```
+
+必须保留完整的 `SYSTEMSERVERCLASSPATH`，不能简化为
+`/system/framework/services.jar`。例如魅族 Android 15 的
+`com.android.server.DeviceControlService` 位于
+`/apex/com.flyme.runtime/javalib/service-flyme.jar`；只传 `services.jar` 会让
+`android_servers` 的 `JNI_OnLoad` 找不到类并直接 abort 进程。
+
+这一加载步骤是必要的，因为 `DisplayControl` 的物理显示方法依赖
+`android_servers` 原生库。
+
+`apply-patch.ps1` 同时支持两种输入：
+
+- 官方 `an-link`：应用 DisplayManager 显示补丁和息屏补丁
+- 已经安装 v1 显示补丁的 `an-link`：跳过已存在的显示补丁，只补上息屏控制
+
+## 8. 为什么不动 `internalStreamScreen`
 
 `internalStreamScreen` 里有 try/catch 保护和十几个寄存器的流转，改它风险最大。
 而 `setDisplaySurface` 的入参恰好已经带了**编码器 Surface** 和**目标 Rect**，

@@ -112,7 +112,48 @@ AnLink 的 server 没有源码，所以直接改 dex 字节码，改动控制在
 
 细节见 [patch-diff.md](patch-diff.md)。
 
-## 6. 验证方法
+## 6. 为什么息屏控制也失效
+
+投屏恢复以后，AnLink 的普通触控已经工作，但“息屏”仍无效。控制消息这一层没有问题：
+
+- 桌面端发送 `ControlMessage.TYPE_SET_SCREEN_POWER_MODE`
+- `Controller.handleEvent()` 正确解析出 `POWER_MODE_OFF`
+- 随后调用 `Device.setScreenPowerMode(0)`
+
+问题在 `Device.setScreenPowerMode()` 的最后一步：
+
+```java
+IBinder display = SurfaceControl.getBuiltInDisplay();
+SurfaceControl.setDisplayPowerMode(display, mode);
+```
+
+Android 10+ 的 `getBuiltInDisplay()` 实际转调
+`SurfaceControl.getInternalDisplayToken()`。Android 14 将物理显示的
+`getPhysicalDisplayIds()` / `getPhysicalDisplayToken(long)` 移到了
+`com.android.server.display.DisplayControl`，原调用返回 null 或不可用 token，
+电源模式设置失败。
+
+scrcpy 2.3.1 的修法是：在 Android 14+ 中从完整的 `SYSTEMSERVERCLASSPATH` 加载
+`DisplayControl`，枚举所有物理显示，再逐个调用
+`SurfaceControl.setDisplayPowerMode(token, mode)`。补丁移植了该路径，并保留
+旧实现作为 ROM 兼容回退。
+
+实际移植时有三个容易全部命中的错误，已在 v1.2 修正：
+
+1. 版本分支曾写成 `if-ge SDK, 34, :legacy`，导致 Android 14/15 反而进入旧路径；
+2. 物理显示数组的非空判断曾写成 `if-nez`，导致列表非空时错误跳回旧路径；
+3. 类路径分支曾错误地落到 `/system/framework/services.jar`，截断了厂商服务路径。
+   魅族把 `com.android.server.DeviceControlService` 放在
+   `/apex/com.flyme.runtime/javalib/service-flyme.jar`，截断
+   `SYSTEMSERVERCLASSPATH` 会让 `android_servers` 的 JNI 初始化直接 abort。
+
+最终实现使用 `android.system.Os.getenv()` 读取完整类路径，先显式加载
+`DeviceControlService`，再从该类的 ClassLoader 加载 `android_servers`。
+
+这与 scrcpy 的息屏语义一致：只关闭物理屏幕面板，不暂停主显示的渲染和输入分发，
+所以电脑端仍能看到画面并继续操作手机。
+
+## 7. 验证方法
 
 补丁后的服务端会在 stderr 打一行：
 
@@ -130,3 +171,7 @@ $adb = "$env:APPDATA\AnLink\ald.exe"   # 或安装目录里的 ald.exe
 ```
 
 正常时会先输出 1 字节 `0x00` + 64 字节设备名，随后是 H.264 码流；异常时会有 Java 堆栈。
+
+息屏路径如果成功，`setScreenPowerMode()` 会对每个物理显示返回成功；失败时 stderr
+会包含 `Could not initialize DisplayControl`、`Could not get physical display ids`
+或 `Could not get physical display token`。
