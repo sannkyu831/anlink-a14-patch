@@ -89,7 +89,7 @@ Android 14 把物理显示的枚举和 token 获取移到了系统 `DisplayContr
 
 1. 关闭 AnLink
 2. 备份安装目录里的 `an-link`
-3. 用本仓库 `release/` 里的同名文件覆盖
+3. 从 [GitHub Release](../../releases/latest) 附件下载 `an-link`，用同名文件覆盖
 4. 启动 AnLink
 
 > 只改这一个文件。`an-link` 是手机端的 dex 容器（一个 zip，里面只有 `classes.dex`）。
